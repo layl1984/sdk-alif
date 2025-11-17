@@ -177,7 +177,6 @@ pipeline {
                             ./app-write-mram -p
                             popd
                             """
-                            reset_board()
                             Flash_board_echo_server = 'Pass'
                         } catch (Exception e) {
                             Flash_board_echo_server = 'Fail'
@@ -1517,7 +1516,6 @@ pipeline {
                                 ./app-write-mram -p
                                 popd
                                 """
-                            reset_boards()
                             Flash_board = 'Pass'
                         } catch (Exception e) {
                             Flash_board = 'Fail'
@@ -1612,60 +1610,6 @@ pipeline {
         failure {
             echo " Pr check failed for ${env.BRANCH_NAME}"
         }
-    }
-}
-def reset_board() {
-    def maxRetries = 10
-    def success = false
-
-    for (int attempt = 1; attempt <= maxRetries; attempt++) {
-        println " Attempt #${attempt} to reset board"
-
-        sh """#!/bin/bash -x
-            ykushcmd ykushxs -s $YKUSHDUT1 -d
-            ykushcmd ykushxs -s $YKUSHDUT2 -d
-            sleep 10
-            ykushcmd ykushxs -s $YKUSHDUT1 -u
-            ykushcmd ykushxs -s $YKUSHDUT2 -u
-            sleep 5
-        """
-        def checkStatus = sh(script: 'python3 $WORKSPACE/automation/check_uart_output.py', returnStatus: true)
-        if (checkStatus == 0) {
-            success = true
-            break
-        } else {
-            println ' Retrying...'
-        }
-    }
-    if (!success) {
-        error " board did not respond after ${maxRetries} attempts!"
-    }
-}
-def reset_boards() {
-    def maxRetries = 10
-    def success = false
-
-    for (int attempt = 1; attempt <= maxRetries; attempt++) {
-        println " Attempt #${attempt} to reset board"
-
-        sh """#!/bin/bash -x
-            ykushcmd ykushxs -s $YKUSHDUT1 -d
-            ykushcmd ykushxs -s $YKUSHDUT2 -d
-            sleep 10
-            ykushcmd ykushxs -s $YKUSHDUT1 -u
-            ykushcmd ykushxs -s $YKUSHDUT2 -u
-            sleep 5
-        """
-        def checkStatus = sh(script: 'python3 ble_automation/check_uart_output.py', returnStatus: true)
-        if (checkStatus == 0) {
-            success = true
-            break
-        } else {
-            println ' Retrying...'
-        }
-    }
-    if (!success) {
-        error " board did not respond after ${maxRetries} attempts!"
     }
 }
 
