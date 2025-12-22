@@ -11,6 +11,7 @@
 #include <zephyr/logging/log.h>
 
 #include <zephyr/device.h>
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/init.h>
 #include <zephyr/pm/pm.h>
 #include <zephyr/pm/policy.h>
@@ -34,31 +35,76 @@
 #include "gatt_db.h"
 #include "gatt_srv.h"
 #include "ke_mem.h"
-#include "power_mgr.h"
+
+#define DEBUG_PIN_NODE DT_ALIAS(debug_pin)
+
+#if DT_NODE_EXISTS(DEBUG_PIN_NODE)
+static const struct gpio_dt_spec debug_pin = GPIO_DT_SPEC_GET_OR(DEBUG_PIN_NODE, gpios, {0});
+#endif
+
+#if !defined(CONFIG_SOC_SERIES_B1)
+#error "Application works only with B1 devices"
+#endif
 
 /**
  * As per the application requirements, it can remove the memory blocks which are not in use.
  */
-#if defined(CONFIG_SOC_SERIES_E1C) || defined(CONFIG_SOC_SERIES_B1)
-	#define APP_RET_MEM_BLOCKS SRAM4_1_MASK | SRAM4_2_MASK | SRAM4_3_MASK | SRAM4_4_MASK | \
-					SRAM5_1_MASK | SRAM5_2_MASK | SRAM5_3_MASK | SRAM5_4_MASK |\
-					SRAM5_5_MASK
-	#define SERAM_MEMORY_BLOCKS_IN_USE SERAM_1_MASK | SERAM_2_MASK | SERAM_3_MASK | SERAM_4_MASK
-#else
-	#define APP_RET_MEM_BLOCKS SRAM4_1_MASK | SRAM4_2_MASK | SRAM5_1_MASK | SRAM5_2_MASK
-	#define SERAM_MEMORY_BLOCKS_IN_USE SERAM_MASK
-#endif
+#define APP_RET_MEM_BLOCKS                                                                         \
+	SRAM4_1_MASK | SRAM4_2_MASK | SRAM4_3_MASK | SRAM4_4_MASK | SRAM5_1_MASK | SRAM5_2_MASK |  \
+		SRAM5_3_MASK | SRAM5_4_MASK | SRAM5_5_MASK
+#define SERAM_MEMORY_BLOCKS_IN_USE SERAM_1_MASK | SERAM_2_MASK | SERAM_3_MASK | SERAM_4_MASK
 
 #if DT_NODE_HAS_COMPAT_STATUS(DT_NODELABEL(rtc0), snps_dw_apb_rtc, okay)
-	#define WAKEUP_SOURCE DT_NODELABEL(rtc0)
-	#define SE_OFFP_EWIC_CFG EWIC_RTC_A
-	#define SE_OFFP_WAKEUP_EVENTS WE_LPRTC
+#define WAKEUP_SOURCE         DT_NODELABEL(rtc0)
+#define SE_OFFP_EWIC_CFG      EWIC_RTC_A
+#define SE_OFFP_WAKEUP_EVENTS WE_LPRTC
 #elif DT_NODE_HAS_COMPAT_STATUS(DT_NODELABEL(timer0), snps_dw_timers, okay)
-	#define WAKEUP_SOURCE DT_NODELABEL(timer0)
-	#define SE_OFFP_EWIC_CFG EWIC_VBAT_TIMER
-	#define SE_OFFP_WAKEUP_EVENTS WE_LPTIMER0
+#define WAKEUP_SOURCE         DT_NODELABEL(timer0)
+#define SE_OFFP_EWIC_CFG      EWIC_VBAT_TIMER
+#define SE_OFFP_WAKEUP_EVENTS WE_LPTIMER0
 #else
 #error "Wakeup Device not enabled in the dts"
+#endif
+
+#define WAKEUP_SOURCE_IRQ     DT_IRQ_BY_IDX(WAKEUP_SOURCE, 0, irq)
+
+/**
+ * Use the HFOSC clock for the UART console
+ */
+#if DT_SAME_NODE(DT_NODELABEL(uart4), DT_CHOSEN(zephyr_console))
+#define CONSOLE_UART_NUM 4
+#define EARLY_BOOT_CONSOLE_INIT 1
+#elif DT_SAME_NODE(DT_NODELABEL(uart3), DT_CHOSEN(zephyr_console))
+#define CONSOLE_UART_NUM 3
+#define EARLY_BOOT_CONSOLE_INIT 1
+#elif DT_SAME_NODE(DT_NODELABEL(uart2), DT_CHOSEN(zephyr_console))
+#define CONSOLE_UART_NUM 2
+#define EARLY_BOOT_CONSOLE_INIT 1
+#elif DT_SAME_NODE(DT_NODELABEL(uart1), DT_CHOSEN(zephyr_console))
+#define CONSOLE_UART_NUM 1
+#define EARLY_BOOT_CONSOLE_INIT 1
+#else
+#define EARLY_BOOT_CONSOLE_INIT 0
+#endif
+
+#if EARLY_BOOT_CONSOLE_INIT
+#define UART_CTRL_CLK_SEL_POS 8
+static int app_pre_console_init(void)
+{
+	/* Enable HFOSC in CGU */
+	sys_set_bits(CGU_CLK_ENA, BIT(23));
+
+	/* Enable HFOSC for the UART console */
+	sys_clear_bits(EXPSLV_UART_CTRL, BIT((CONSOLE_UART_NUM + UART_CTRL_CLK_SEL_POS)));
+	return 0;
+}
+
+/**
+ * Console UART init is needed to adjust clocks properly.
+ * This must be fixed into UART dirver and this code can be
+ * removed when ready.
+ */
+SYS_INIT(app_pre_console_init, PRE_KERNEL_1, 50);
 #endif
 
 /* Configuration for different BLE and application timing parameters
@@ -69,8 +115,9 @@ int n __attribute__((noinit));
 #define ADV_INT_MAX_SLOTS                150
 #define CONN_INT_MIN_SLOTS               20
 #define CONN_INT_MAX_SLOTS               100
-#define RTC_WAKEUP_INTERVAL_MS           (20 + (n++ % 50))
-#define RTC_CONNECTED_WAKEUP_INTERVAL_MS 400
+#define RTC_WAKEUP_INTERVAL_MS           (55 + (n++ % 50))
+#define RTC_CONNECTED_WAKEUP_INTERVAL_MS (55 + (n++ % 50))
+#define SERVICE_INTERVAL_MS              1000
 #else
 #define ADV_INT_MIN_SLOTS                1000
 #define ADV_INT_MAX_SLOTS                1000
@@ -78,6 +125,7 @@ int n __attribute__((noinit));
 #define CONN_INT_MAX_SLOTS               800
 #define RTC_WAKEUP_INTERVAL_MS           5000
 #define RTC_CONNECTED_WAKEUP_INTERVAL_MS 2150
+#define SERVICE_INTERVAL_MS              RTC_CONNECTED_WAKEUP_INTERVAL_MS
 #endif
 
 static uint8_t hello_arr[] = "HelloHello";
@@ -104,6 +152,12 @@ static uint8_t hello_arr_index __attribute__((noinit));
 #define ATT_16_TO_128_ARRAY(uuid)                                                                  \
 	{(uuid) & 0xFF, (uuid >> 8) & 0xFF, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 
+enum pm_state_mode_type {
+	PM_STATE_MODE_IDLE,
+	PM_STATE_MODE_STANDBY,
+	PM_STATE_MODE_STOP
+};
+
 /* List of attributes in the service */
 enum service_att_list {
 	HELLO_IDX_SERVICE = 0,
@@ -118,16 +172,17 @@ enum service_att_list {
 	HELLO_IDX_NB,
 };
 
-static uint32_t conn_count __attribute__((noinit));
-static uint8_t conn_status __attribute__((noinit));
+static volatile uint8_t conn_status __attribute__((noinit));
 /* Store advertising activity index for re-starting after disconnection */
-static uint8_t conn_idx __attribute__((noinit));
+static volatile uint8_t conn_idx __attribute__((noinit));
 static uint8_t adv_actv_idx __attribute__((noinit));
 static struct service_env env __attribute__((noinit));
 
-/* Load name from configuration file */
-#define DEVICE_NAME "ALIF_PM"
-static const char device_name[] = DEVICE_NAME;
+static volatile bool wakeup_status;
+static volatile int run_profile_error;
+static uint32_t served_intervals_ms;
+
+static const char device_name[] = CONFIG_BLE_DEVICE_NAME;
 
 /* Service UUID to pass into gatt_db_svc_add */
 static const uint8_t hello_service_uuid[] = HELLO_UUID_128_SVC;
@@ -179,8 +234,8 @@ struct service_env {
 	uint8_t user_lid;
 	uint8_t char0_val[250];
 	uint8_t char1_val;
-	bool ntf_ongoing;
-	uint16_t ntf_cfg;
+	volatile bool ntf_ongoing;
+	volatile uint16_t ntf_cfg;
 };
 
 const gapc_le_con_param_nego_with_ce_len_t preferred_connection_param = {
@@ -192,7 +247,7 @@ const gapc_le_con_param_nego_with_ce_len_t preferred_connection_param = {
 	.hdr.sup_to = 800};
 
 /* Macros */
-LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
+LOG_MODULE_REGISTER(main, CONFIG_MAIN_LOG_LEVEL);
 
 /* function headers */
 static uint16_t service_init(void);
@@ -218,31 +273,30 @@ static uint16_t start_le_adv(uint8_t actv_idx)
  */
 void on_gapc_proc_cmp_cb(uint8_t conidx, uint32_t metainfo, uint16_t status)
 {
-	printk("%s conn:%d status:%d\n", __func__, conidx, status);
+	LOG_INF("%s conn:%d status:%d\n", __func__, conidx, status);
 }
 
 static void on_le_connection_req(uint8_t conidx, uint32_t metainfo, uint8_t actv_idx, uint8_t role,
 				 const gap_bdaddr_t *p_peer_addr,
 				 const gapc_le_con_param_t *p_con_params, uint8_t clk_accuracy)
 {
-	LOG_INF("Connection request on index %u", conidx);
+	LOG_DBG("Connection request on index %u", conidx);
 	gapc_le_connection_cfm(conidx, 0, NULL);
 
-	printk("Connection parameters: interval %u, latency %u, supervision timeout %u\n",
-	       p_con_params->interval, p_con_params->latency, p_con_params->sup_to);
+	LOG_INF("Connection parameters: interval %u, latency %u, supervision timeout %u",
+		p_con_params->interval, p_con_params->latency, p_con_params->sup_to);
 
-	LOG_INF("Peer BD address %02X:%02X:%02X:%02X:%02X:%02X (conidx: %u)", p_peer_addr->addr[5],
+	LOG_DBG("Peer BD address %02X:%02X:%02X:%02X:%02X:%02X (conidx: %u)", p_peer_addr->addr[5],
 		p_peer_addr->addr[4], p_peer_addr->addr[3], p_peer_addr->addr[2],
 		p_peer_addr->addr[1], p_peer_addr->addr[0], conidx);
 
 	conn_status = BT_CONN_STATE_CONNECTED;
 	conn_idx = conidx;
-	conn_count = 0;
-	printk("BLE Connected conn:%d\n", conidx);
+	LOG_DBG("BLE Connected conn:%d", conidx);
 
 	k_sem_give(&conn_sem);
 
-	LOG_DBG("Please enable notifications on peer device..");
+	LOG_INF("Please enable notifications on peer device..");
 }
 
 static void on_key_received(uint8_t conidx, uint32_t metainfo, const gapc_pairing_keys_t *p_keys)
@@ -254,7 +308,7 @@ static void on_disconnection(uint8_t conidx, uint32_t metainfo, uint16_t reason)
 {
 	uint16_t err;
 
-	LOG_INF("Connection index %u disconnected for reason %u", conidx, reason);
+	LOG_DBG("Connection index %u disconnected for reason %u", conidx, reason);
 
 	err = start_le_adv(adv_actv_idx);
 	if (err) {
@@ -264,9 +318,8 @@ static void on_disconnection(uint8_t conidx, uint32_t metainfo, uint16_t reason)
 	}
 
 	conn_status = BT_CONN_STATE_DISCONNECTED;
-	conn_idx = 0;
-	conn_count = 0;
-	printk("BLE disconnected conn:%d. Waiting new connection\n", conidx);
+	conn_idx = GAP_INVALID_CONIDX;
+	LOG_INF("BLE disconnected conn:%d. Waiting new connection", conidx);
 }
 
 static void on_name_get(uint8_t conidx, uint32_t metainfo, uint16_t token, uint16_t offset,
@@ -275,7 +328,7 @@ static void on_name_get(uint8_t conidx, uint32_t metainfo, uint16_t token, uint1
 	const size_t device_name_len = sizeof(device_name) - 1;
 	const size_t short_len = (device_name_len > max_len ? max_len : device_name_len);
 
-	printk("%s\n", __func__);
+	LOG_DBG("%s", __func__);
 
 	gapc_le_get_name_cfm(conidx, token, GAP_ERR_NO_ERROR, device_name_len, short_len,
 			     (const uint8_t *)device_name);
@@ -284,7 +337,7 @@ static void on_name_get(uint8_t conidx, uint32_t metainfo, uint16_t token, uint1
 static void on_appearance_get(uint8_t conidx, uint32_t metainfo, uint16_t token)
 {
 	/* Send 'unknown' appearance */
-	printk("%s\n", __func__);
+	LOG_DBG("%s", __func__);
 	gapc_le_get_appearance_cfm(conidx, token, GAP_ERR_NO_ERROR, 0);
 }
 
@@ -297,34 +350,36 @@ static void on_pref_param_get(uint8_t conidx, uint32_t metainfo, uint16_t token)
 		.latency = preferred_connection_param.hdr.latency,
 		.conn_timeout = 3200 * 2,
 	};
-	printk("%s\n", __func__);
+	LOG_DBG("%s", __func__);
 
 	gapc_le_get_preferred_periph_params_cfm(conidx, token, GAP_ERR_NO_ERROR, prefs);
 }
 
 void on_bond_data_updated(uint8_t conidx, uint32_t metainfo, const gapc_bond_data_updated_t *p_data)
 {
-	printk("%s\n", __func__);
+	LOG_DBG("%s", __func__);
 }
 void on_auth_payload_timeout(uint8_t conidx, uint32_t metainfo)
 {
-	printk("%s\n", __func__);
+	LOG_DBG("%s", __func__);
 }
 void on_no_more_att_bearer(uint8_t conidx, uint32_t metainfo)
 {
-	printk("%s\n", __func__);
+	LOG_DBG("%s", __func__);
 }
 void on_cli_hash_info(uint8_t conidx, uint32_t metainfo, uint16_t handle, const uint8_t *p_hash)
 {
-	printk("%s\n", __func__);
+	LOG_DBG("%s", __func__);
 }
 void on_name_set(uint8_t conidx, uint32_t metainfo, uint16_t token, co_buf_t *p_buf)
 {
-	printk("%s\n", __func__);
+	LOG_DBG("%s", __func__);
+	gapc_le_set_name_cfm(conidx, token, GAP_ERR_NO_ERROR);
 }
 void on_appearance_set(uint8_t conidx, uint32_t metainfo, uint16_t token, uint16_t appearance)
 {
-	printk("%s\n", __func__);
+	LOG_DBG("%s", __func__);
+	gapc_le_set_appearance_cfm(conidx, token, GAP_ERR_NO_ERROR);
 }
 
 static const gapc_connection_req_cb_t gapc_con_cbs = {
@@ -352,27 +407,36 @@ static const gapc_connection_info_cb_t gapc_con_inf_cbs = {
 
 void on_param_update_req(uint8_t conidx, uint32_t metainfo, const gapc_le_con_param_nego_t *p_param)
 {
-	printk("%s:%d\n", __func__, conidx);
+	LOG_DBG("%s:%d", __func__, conidx);
+	gapc_le_update_params_cfm(conidx, true, preferred_connection_param.ce_len_min,
+				  preferred_connection_param.ce_len_max);
 }
 void on_param_updated(uint8_t conidx, uint32_t metainfo, const gapc_le_con_param_t *p_param)
 {
-	printk("%s conn:%d\n", __func__, conidx);
+	LOG_DBG("%s conn:%d", __func__, conidx);
 }
 void on_packet_size_updated(uint8_t conidx, uint32_t metainfo, uint16_t max_tx_octets,
 			    uint16_t max_tx_time, uint16_t max_rx_octets, uint16_t max_rx_time)
 {
-	printk("%s conn:%d max_tx_octets:%d max_tx_time:%d  max_rx_octets:%d "
-	       "max_rx_time:%d\n",
-	       __func__, conidx, max_tx_octets, max_tx_time, max_rx_octets, max_rx_time);
+	LOG_DBG("%s conn:%d max_tx_octets:%d max_tx_time:%d  max_rx_octets:%d "
+		"max_rx_time:%d",
+		__func__, conidx, max_tx_octets, max_tx_time, max_rx_octets, max_rx_time);
+
+	/* PeHo: Seppo why this is done here? */
+	const uint16_t ret = gapc_le_update_params(conidx, 0, &preferred_connection_param,
+					     on_gapc_proc_cmp_cb);
+
+	LOG_INF("Update connection %u ret:%d\n", conidx, ret);
 }
+
 void on_phy_updated(uint8_t conidx, uint32_t metainfo, uint8_t tx_phy, uint8_t rx_phy)
 {
-	printk("%s conn:%d tx_phy:%d rx_phy:%d\n", __func__, conidx, tx_phy, rx_phy);
+	LOG_DBG("%s conn:%d tx_phy:%d rx_phy:%d", __func__, conidx, tx_phy, rx_phy);
 }
 void on_subrate_updated(uint8_t conidx, uint32_t metainfo,
 			const gapc_le_subrate_t *p_subrate_params)
 {
-	printk("%s conn:%d\n", __func__, conidx);
+	LOG_DBG("%s conn:%d", __func__, conidx);
 }
 /* All callbacks in this struct are optional */
 static const gapc_le_config_cb_t gapc_le_cfg_cbs = {
@@ -410,7 +474,7 @@ static uint16_t set_advertising_data(uint8_t actv_idx)
 	co_buf_t *p_buf;
 
 	err = co_buf_alloc(&p_buf, 0, adv_len, 0);
-	if (err != 0) {
+	if (err) {
 		LOG_ERR("Buffer allocation failed");
 		return err;
 	}
@@ -433,7 +497,7 @@ static uint16_t set_scan_data(uint8_t actv_idx)
 	const size_t device_name_len = sizeof(device_name) - 1;
 	const uint16_t adv_device_name = GATT_HANDLE_LEN + device_name_len;
 	const uint16_t adv_uuid_svc = GATT_HANDLE_LEN + GATT_UUID_128_LEN;
-	const uint16_t adv_len = adv_uuid_svc+adv_device_name;
+	const uint16_t adv_len = adv_uuid_svc + adv_device_name;
 	uint16_t err = co_buf_alloc(&p_buf, 0, adv_len, 0);
 
 	uint8_t *p_data = co_buf_data(p_buf);
@@ -452,7 +516,9 @@ static uint16_t set_scan_data(uint8_t actv_idx)
 	memcpy(p_data + 2, &svc, sizeof(svc));
 
 	__ASSERT(err == 0, "Buffer allocation failed");
-	LOG_ERR("set_scan_data: Buffer allocation failed = %d", err);
+	if (err) {
+		LOG_ERR("Scan data buffer allocation failed = %d", err);
+	}
 
 	err = gapm_le_set_scan_response_data(actv_idx, p_buf);
 	/* Release ownership of buffer so stack can free it when done */
@@ -530,11 +596,11 @@ static uint16_t create_advertising(void)
 		.tx_pwr = 0,
 		.filter_pol = GAPM_ADV_ALLOW_SCAN_ANY_CON_ANY,
 		.prim_cfg = {
-				.adv_intv_min = ADV_INT_MIN_SLOTS,
-				.adv_intv_max = ADV_INT_MAX_SLOTS,
-				.ch_map = ADV_ALL_CHNLS_EN,
-				.phy = GAPM_PHY_TYPE_LE_1M,
-			},
+			.adv_intv_min = ADV_INT_MIN_SLOTS,
+			.adv_intv_max = ADV_INT_MAX_SLOTS,
+			.ch_map = ADV_ALL_CHNLS_EN,
+			.phy = GAPM_PHY_TYPE_LE_1M,
+		},
 	};
 
 	err = gapm_le_create_adv_legacy(0, GAPM_STATIC_ADDR, &adv_create_params, &le_adv_cbs);
@@ -606,7 +672,7 @@ static void on_att_read_get(uint8_t conidx, uint8_t user_lid, uint16_t token, ui
 
 		case HELLO_IDX_CHAR0_NTF_CFG:
 			att_val_len = sizeof(env.ntf_cfg);
-			att_val = &env.ntf_cfg;
+			att_val = (void *)&env.ntf_cfg;
 			break;
 
 		default:
@@ -734,6 +800,8 @@ static uint16_t service_notification_send(uint32_t conidx_mask)
 	uint16_t status;
 	uint8_t conidx = 0;
 
+	ARG_UNUSED(conidx_mask);
+
 	/* Cannot send another notification unless previous one is completed */
 	if (env.ntf_ongoing) {
 		return PRF_ERR_REQ_DISALLOWED;
@@ -751,11 +819,8 @@ static uint16_t service_notification_send(uint32_t conidx_mask)
 		return GAP_ERR_INSUFF_RESOURCES;
 	}
 
-	uint8_t loop_count = (CONFIG_DATA_STRING_LENGTH / 5);
+	uint8_t const loop_count = ((CONFIG_DATA_STRING_LENGTH + 4) / 5);
 
-	if (CONFIG_DATA_STRING_LENGTH % 5) {
-		loop_count += 1;
-	}
 	for (int i = 0; i < loop_count; i++) {
 		memcpy(env.char0_val + i * 5, &hello_arr[hello_arr_index], 5);
 	}
@@ -778,31 +843,53 @@ static uint16_t service_notification_send(uint32_t conidx_mask)
 	return status;
 }
 
+static int set_off_profile(enum pm_state_mode_type const pm_mode)
+{
+	int ret;
+	off_profile_t offp;
 
-/*
- * MRAM base address - used to determine boot location
- * TCM boot: VTOR = 0x0
- * MRAM boot: VTOR >= 0x80000000
- */
-#define MRAM_BASE_ADDRESS 0x80000000
+	/* Set default for stop mode with RTC wakeup support */
+	offp.power_domains = PD_VBAT_AON_MASK;
+/* If CONFIG_FLASH_BASE_ADDRESS is zero application run from itcm and no MRAM needed */
+#if (CONFIG_FLASH_BASE_ADDRESS == 0)
+	offp.memory_blocks = 0;
+#else
+	offp.memory_blocks = MRAM_MASK;
+#endif
+	offp.memory_blocks |= SERAM_MEMORY_BLOCKS_IN_USE;
+	offp.memory_blocks |= APP_RET_MEM_BLOCKS;
+	offp.dcdc_voltage = 775;
 
-/*
- * Helper macro to check if booting from MRAM
- */
-#define IS_BOOTING_FROM_MRAM() (SCB->VTOR >= MRAM_BASE_ADDRESS)
+	switch (pm_mode) {
+	case PM_STATE_MODE_IDLE:
+	case PM_STATE_MODE_STANDBY:
+		offp.power_domains |= PD_SSE700_AON_MASK;
+		offp.ip_clock_gating = 0;
+		offp.phy_pwr_gating = 0;
+		offp.dcdc_mode = DCDC_MODE_PFM_AUTO;
+		break;
+	case PM_STATE_MODE_STOP:
+		offp.ip_clock_gating = 0;
+		offp.phy_pwr_gating = 0;
+		offp.dcdc_mode = DCDC_MODE_OFF;
+		break;
+	}
 
-/*
- * PM_STATE_SUSPEND_TO_RAM (S2RAM) support:
- * - HE core + TCM boot: SUPPORTED (TCM retention keeps code and context)
- *
- * PM_STATE_SOFT_OFF support:
- * - HE core + MRAM boot: Supported (MRAM preserved, wakeup possible)
- */
-#define S2RAM_SUPPORTED (!IS_BOOTING_FROM_MRAM())
-#define SOFT_OFF_SUPPORTED IS_BOOTING_FROM_MRAM()
+	offp.aon_clk_src = CLK_SRC_LFXO;
+	offp.stby_clk_src = CLK_SRC_HFRC;
+	offp.stby_clk_freq = SCALED_FREQ_RC_STDBY_0_075_MHZ;
+	offp.ewic_cfg = SE_OFFP_EWIC_CFG;
+	offp.wakeup_events = SE_OFFP_WAKEUP_EVENTS;
+	offp.vtor_address = SCB->VTOR;
+	offp.vtor_address_ns = SCB->VTOR;
 
-#define OFF_STATE_NODE_ID DT_PHANDLE_BY_IDX(DT_NODELABEL(cpu0), cpu_power_states, 0)
+	ret = se_service_set_off_cfg(&offp);
+	if (ret) {
+		LOG_ERR("SE: set_off_cfg failed = %d", ret);
+	}
 
+	return ret;
+}
 
 /**
  * Set the RUN profile parameters for this application.
@@ -812,25 +899,20 @@ static int app_set_run_params(void)
 	run_profile_t runp;
 	int ret;
 
-	runp.power_domains =
-		PD_VBAT_AON_MASK | PD_SYST_MASK | PD_SSE700_AON_MASK | PD_DBSS_MASK | PD_SESS_MASK;
-	runp.dcdc_voltage  = 775;
+	runp.power_domains = PD_VBAT_AON_MASK | PD_SYST_MASK | PD_SSE700_AON_MASK | PD_SESS_MASK;
+	runp.dcdc_voltage = 775;
 	runp.dcdc_mode = DCDC_MODE_PFM_FORCED;
-	runp.aon_clk_src   = CLK_SRC_LFXO;
-	runp.run_clk_src   = CLK_SRC_PLL;
-	runp.cpu_clk_freq = CLOCK_FREQUENCY_160MHZ;
+	runp.aon_clk_src = CLK_SRC_LFXO;
+	runp.run_clk_src = CLK_SRC_HFRC;
+	runp.cpu_clk_freq = CLOCK_FREQUENCY_76_8_RC_MHZ;
 	runp.phy_pwr_gating = 0;
-	runp.ip_clock_gating = LP_PERIPH_MASK;
+	runp.ip_clock_gating = 0;
 	runp.vdd_ioflex_3V3 = IOFLEX_LEVEL_1V8;
-	runp.scaled_clk_freq = SCALED_FREQ_XO_HIGH_DIV_38_4_MHZ;
+	runp.scaled_clk_freq = SCALED_FREQ_RC_ACTIVE_76_8_MHZ;
 
 	runp.memory_blocks = MRAM_MASK;
-	runp.memory_blocks |= SRAM2_MASK | SRAM3_MASK;
-	runp.memory_blocks |= SERAM_1_MASK | SERAM_2_MASK | SERAM_3_MASK | SERAM_4_MASK;
-	runp.memory_blocks |=
-		SRAM4_1_MASK | SRAM4_2_MASK | SRAM4_3_MASK | SRAM4_4_MASK; /* M55-HE ITCM */
-	runp.memory_blocks |= SRAM5_1_MASK | SRAM5_2_MASK | SRAM5_3_MASK | SRAM5_4_MASK |
-			      SRAM5_5_MASK; /* M55-HE DTCM */
+	runp.memory_blocks |= SERAM_MEMORY_BLOCKS_IN_USE;
+	runp.memory_blocks |= APP_RET_MEM_BLOCKS;
 
 	if (IS_ENABLED(CONFIG_MIPI_DSI)) {
 		runp.phy_pwr_gating |= MIPI_TX_DPHY_MASK | MIPI_RX_DPHY_MASK | MIPI_PLL_DPHY_MASK;
@@ -838,8 +920,6 @@ static int app_set_run_params(void)
 	}
 
 	ret = se_service_set_run_cfg(&runp);
-	__ASSERT(ret == 0, "SE: set_run_cfg failed = %d", ret);
-	LOG_ERR("SE: set_run_cfg failed = %d", ret);
 
 	return ret;
 }
@@ -851,21 +931,25 @@ static int app_set_run_params(void)
  */
 SYS_INIT(app_set_run_params, PRE_KERNEL_1, 3);
 
+static inline uint32_t get_wakeup_irq_status(void)
+{
+	return NVIC_GetPendingIRQ(WAKEUP_SOURCE_IRQ);
+}
+
 /**
  * PM Notifier callback for power state entry
  */
-static void pm_notify_state_entry(enum pm_state state)
+static void pm_notify_state_entry(enum pm_state const state)
 {
+	/* TODO: enable when this is needed */
+	/*
 	const struct pm_state_info *next_state = pm_state_next_get(0);
 	uint8_t substate_id = next_state ? next_state->substate_id : 0;
-	int ret;
+	*/
 
 	switch (state) {
 	case PM_STATE_SUSPEND_TO_RAM:
 	case PM_STATE_SOFT_OFF:
-		ret = power_mgr_set_offprofile(PM_STATE_MODE_STOP);
-		__ASSERT(ret == 0, "app_set_off_params failed = %d", ret);
-		LOG_ERR("app_set_off_params failed = %d", ret);
 		break;
 	default:
 		__ASSERT(false, "Entering unknown power state %d", state);
@@ -881,23 +965,24 @@ static void pm_notify_state_entry(enum pm_state state)
  * Note: For SOFT_OFF, the system resets completely and app_set_run_params()
  * runs during normal PRE_KERNEL_1 initialization, so this callback is not needed.
  */
-static void pm_notify_pre_device_resume(enum pm_state state)
+static void pm_notify_pre_device_resume(enum pm_state const state)
 {
-	int ret;
+	wakeup_status = get_wakeup_irq_status();
 
 	switch (state) {
-	case PM_STATE_SUSPEND_TO_RAM:
-		ret = app_set_run_params();
-		__ASSERT(ret == 0, "app_set_run_params failed = %d", ret);
-		LOG_ERR("app_set_run_params failed = %d", ret);
+	case PM_STATE_SUSPEND_TO_RAM: {
+		run_profile_error = app_set_run_params();
 		break;
-	case PM_STATE_SOFT_OFF:
+	}
+	case PM_STATE_SOFT_OFF: {
 		/* No action needed - SOFT_OFF causes reset, not resume */
 		break;
-	default:
+	}
+	default: {
 		__ASSERT(false, "Pre-resume for unknown power state %d", state);
 		LOG_ERR("Pre-resume for unknown power state %d", state);
 		break;
+	}
 	}
 }
 
@@ -909,36 +994,122 @@ static struct pm_notifier app_pm_notifier = {
 	.pre_device_resume = pm_notify_pre_device_resume,
 };
 
+void app_ready_for_sleep(void)
+{
+	pm_policy_state_lock_put(PM_STATE_SOFT_OFF, PM_ALL_SUBSTATES);
+	pm_policy_state_lock_put(PM_STATE_SUSPEND_TO_RAM, PM_ALL_SUBSTATES);
+}
 
 /*
- * This function will be invoked in the PRE_KERNEL_2 phase of the init routine.
+ * This function will be invoked in the PRE_KERNEL_1 phase of the init
+ * routine to prevent sleep during startup.
  */
 static int app_pre_kernel_init(void)
 {
 	/* Register PM notifier callbacks */
 	pm_notifier_register(&app_pm_notifier);
 
+	pm_policy_state_lock_get(PM_STATE_SOFT_OFF, PM_ALL_SUBSTATES);
+	pm_policy_state_lock_get(PM_STATE_SUSPEND_TO_RAM, PM_ALL_SUBSTATES);
+
 	return 0;
 }
-SYS_INIT(app_pre_kernel_init, PRE_KERNEL_2, 0);
+SYS_INIT(app_pre_kernel_init, PRE_KERNEL_1, 39);
 
+#if defined(CONFIG_CORTEX_M_SYSTICK_LPM_TIMER_HOOKS)
+
+static uint32_t idle_timer_pre_idle;
+
+/* Idle timer used for timer while entering the idle state */
+static const struct device *idle_timer = DEVICE_DT_GET(DT_CHOSEN(zephyr_cortex_m_idle_timer));
+/**
+ * To simplify the driver, implement the callout to Counter API
+ * as hooks that would be provided by platform drivers if
+ * CONFIG_CORTEX_M_SYSTICK_LPM_TIMER_HOOKS was selected instead.
+ */
+void z_cms_lptim_hook_on_lpm_entry(uint64_t max_lpm_time_us)
+{
+
+	/* Store current value of the selected timer to calculate a
+	 * difference in measurements after exiting the idle state.
+	 */
+	counter_get_value(idle_timer, &idle_timer_pre_idle);
+	/**
+	 * Disable the counter alarm in case it was already running.
+	 */
+	/* counter_cancel_channel_alarm(idle_timer, 0); */
+
+	/* Set the alarm using timer that runs the idle.
+	 * Needed rump-up/setting time, lower accurency etc. should be
+	 * included in the exit-latency in the power state definition.
+	 */
+
+	struct counter_alarm_cfg cfg = {
+		.callback = NULL,
+		.ticks = counter_us_to_ticks(idle_timer, max_lpm_time_us) + idle_timer_pre_idle,
+		.user_data = NULL,
+		.flags = COUNTER_ALARM_CFG_ABSOLUTE,
+	};
+	counter_set_channel_alarm(idle_timer, 0, &cfg);
+}
+
+uint64_t z_cms_lptim_hook_on_lpm_exit(void)
+{
+	/**
+	 * Calculate how much time elapsed according to counter.
+	 */
+	uint32_t idle_timer_post, idle_timer_diff;
+
+	counter_get_value(idle_timer, &idle_timer_post);
+
+	/**
+	 * Check for counter timer overflow
+	 * (TODO: this doesn't work for downcounting timers!)
+	 */
+	if (idle_timer_pre_idle > idle_timer_post) {
+		idle_timer_diff = (counter_get_top_value(idle_timer) - idle_timer_pre_idle) +
+				  idle_timer_post + 1;
+	} else {
+		idle_timer_diff = idle_timer_post - idle_timer_pre_idle;
+	}
+
+	return (uint64_t)counter_ticks_to_us(idle_timer, idle_timer_diff);
+}
+#endif /* CONFIG_CORTEX_M_SYSTICK_LPM_TIMER_COUNTER */
 
 int main(void)
 {
+	const struct device *const wakeup_dev = DEVICE_DT_GET(WAKEUP_SOURCE);
 	uint16_t ble_status;
 	int ret;
 
-	uint32_t wakeup_reason = power_mgr_get_wakeup_reason();
+#if DT_NODE_EXISTS(DEBUG_PIN_NODE)
+	if (!gpio_is_ready_dt(&debug_pin)) {
+		LOG_ERR("Led not ready\n");
+		return 0;
+	}
 
-	if (power_mgr_cold_boot()) {
-		printk("BLE Sleep demo\n");
+	ret = gpio_pin_configure_dt(&debug_pin, GPIO_OUTPUT_ACTIVE);
+	if (ret < 0) {
+		LOG_ERR("Led config failed\n");
+		return 0;
+	}
+#endif
 
-		ret = power_mgr_set_offprofile(PM_STATE_MODE_STOP);
+	if (!device_is_ready(wakeup_dev)) {
+		printk("%s: device not ready", wakeup_dev->name);
+		return -1;
+	}
 
-		if (ret) {
-			printk("off profile set ERROR: %d\n", ret);
-			return ret;
-		}
+	ret = counter_start(wakeup_dev);
+
+	printk("BLE Sleep demo\n");
+
+	ret = set_off_profile(PM_STATE_MODE_STOP);
+
+	if (ret) {
+		LOG_ERR("off profile set failed. error: %d", ret);
+		return ret;
 	}
 
 	/* Start up bluetooth host stack. */
@@ -947,8 +1118,7 @@ int main(void)
 	if (ble_status == 0) {
 		/* BLE initialized first time */
 		hello_arr_index = 0;
-		conn_count = 0;
-		conn_idx = 0;
+		conn_idx = GAP_INVALID_CONIDX;
 		memset(&env, 0, sizeof(struct service_env));
 		conn_status = BT_CONN_STATE_DISCONNECTED;
 
@@ -957,61 +1127,47 @@ int main(void)
 		ble_status = gapm_configure(0, &gapm_cfg, &gapm_cbs, on_gapm_process_complete);
 
 		if (ble_status) {
-			printk("gapm_configure error %u", ble_status);
+			LOG_ERR("gapm_configure error %u", ble_status);
 			return -1;
 		}
 
-		printk("Waiting for initial BLE init...\n");
+		LOG_DBG("Waiting for initial BLE init...");
 		k_sem_take(&init_sem, K_FOREVER);
-		printk("Init complete!\n");
+		LOG_INF("Init complete!");
 	}
 
-	LOG_DBG("RTC wc=%u", wakeup_reason);
+	app_ready_for_sleep();
 
-	if (wakeup_reason && conn_status == BT_CONN_STATE_CONNECTED) {
-		/* RTC wakeups when connection is active */
-		bool sleep_in_subscription = true;
-
-		conn_count++;
-		if (conn_count == 2) {
-			uint16_t ret = gapc_le_update_params(
-				conn_idx, 0, &preferred_connection_param, on_gapc_proc_cmp_cb);
-			printk("Update connection ret:%d\n", ret);
-		}
-		while ((env.ntf_cfg == PRF_CLI_START_NTF) && (!env.ntf_ongoing)) {
-			/* Subscription is active */
-			printk("Data subscribed\n");
-			service_notification_send(UINT32_MAX);
-			if (conn_status != BT_CONN_STATE_CONNECTED || sleep_in_subscription) {
-				break;
-			}
-			k_sleep(K_MSEC(RTC_CONNECTED_WAKEUP_INTERVAL_MS));
-			conn_count++;
-			if (conn_count == 2) {
-				uint16_t ret = gapc_le_update_params(conn_idx, 0,
-								     &preferred_connection_param,
-								     on_gapc_proc_cmp_cb);
-				printk("Update connection ret:%d\n", ret);
-			}
-		}
-	}
-
-	power_mgr_ready_for_sleep();
 	while (1) {
+#if DT_NODE_EXISTS(DEBUG_PIN_NODE)
+		gpio_pin_configure_dt(&debug_pin, GPIO_OUTPUT_ACTIVE);
+		gpio_pin_toggle_dt(&debug_pin);
+#endif
 
-		if (conn_status == BT_CONN_STATE_CONNECTED) {
-			k_sleep(K_MSEC(RTC_CONNECTED_WAKEUP_INTERVAL_MS));
-			conn_count++;
-			if (conn_count == 2) {
-				uint16_t ret = gapc_le_update_params(conn_idx, 0,
-								     &preferred_connection_param,
-								     on_gapc_proc_cmp_cb);
-				printk("Update connection ret:%d\n", ret);
-			}
-			/* Update text at 2.15 second periods */
-			service_notification_send(UINT32_MAX);
-		} else {
+		if (conn_status != BT_CONN_STATE_CONNECTED) {
 			k_sleep(K_MSEC(RTC_WAKEUP_INTERVAL_MS));
+			continue;
+		}
+
+		k_sleep(K_MSEC(RTC_CONNECTED_WAKEUP_INTERVAL_MS));
+
+		/* TODO: better error handling will be needed here! */
+		if (run_profile_error) {
+			LOG_ERR("app_set_run_params failed. error: %d", run_profile_error);
+			return run_profile_error;
+		}
+
+		if (wakeup_status) {
+			served_intervals_ms += RTC_CONNECTED_WAKEUP_INTERVAL_MS;
+
+			if (served_intervals_ms >= SERVICE_INTERVAL_MS) {
+				if ((env.ntf_cfg == PRF_CLI_START_NTF) &&
+					(!env.ntf_ongoing)) {
+					/* Update text at RTC periods */
+					service_notification_send(UINT32_MAX);
+				}
+				served_intervals_ms = 0;
+			}
 		}
 	}
 	return 0;

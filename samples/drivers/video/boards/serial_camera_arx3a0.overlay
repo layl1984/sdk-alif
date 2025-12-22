@@ -10,7 +10,15 @@
 #include <dt-bindings/pinctrl/ensemble-pinctrl.h>
 #include <dt-bindings/i2c/i2c.h>
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/video/video-interfaces.h>
 
+&gpio7 {
+	status = "okay";
+};
+
+&gpio9 {
+	status = "okay";
+};
 
 &i2c1 {
 	status = "okay";
@@ -27,7 +35,12 @@
 
 		port {
 			arx3a0_csi2_ep_out: endpoint {
-				remote-endpoint = <&csi2_ep_in>;
+				bus-type = <VIDEO_BUS_TYPE_CSI2_DPHY>;
+				link-frequencies = < 400000000 >;
+				data-lanes = <1 2>;
+				clock-lane = <0>;
+
+				remote-endpoint-label = "csi2_ep_in";
 			};
 		};
 	};
@@ -35,33 +48,53 @@
 
 &cam {
 	status = "okay";
-	sensor = <&arx3a0>;
-	csi-bus-if = <&csi>;
-	port {
+
+	pinctrl-0 = <&pinctrl_cam_xvclk>;
+	pinctrl-names = "default";
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
 		/* MIPI CSI-2 bus endpoint. */
-		cam_csi2_ep_in: endpoint {
-			remote-endpoint = <&csi2_ep_out>;
+		port@0 {
+			reg = <0>;
+			cam_csi2_ep_in: endpoint {
+				remote-endpoint-label = "csi2_ep_out";
+			};
+		};
+
+		/* Video buffer output endpoint. */
+		port@1 {
+			reg = <1>;
+			cam_mem_ep_out: endpoint {
+				remote-endpoint-label = "application";
+			};
 		};
 	};
 };
 
 &csi {
-	#address-cells = <1>;
-	#size-cells = <0>;
-	port@1 {
-		reg = <1>;
-		csi2_ep_in: endpoint {
-			remote-endpoint = <&arx3a0_csi2_ep_out>;
-		};
-	};
-	port@2 {
-		reg = <2>;
-		csi2_ep_out: endpoint {
-			remote-endpoint = <&cam_csi2_ep_in>;
-		};
-	};
-};
-
-&mipi_dsi {
 	status = "okay";
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		port@1 {
+			reg = <1>;
+			csi2_ep_in: endpoint {
+				bus-type = <VIDEO_BUS_TYPE_CSI2_DPHY>;
+				data-lanes = <1 2>;
+				clock-lane = <0>;
+
+				remote-endpoint-label = "arx3a0_csi2_ep_out";
+			};
+		};
+		port@2 {
+			reg = <2>;
+			csi2_ep_out: endpoint {
+				remote-endpoint-label = "cam_csi2_ep_in";
+				bus-type = <VIDEO_BUS_TYPE_PARALLEL>;
+			};
+		};
+	};
 };
