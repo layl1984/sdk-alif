@@ -118,7 +118,7 @@ pipeline {
         }
 
         stage('Flash the board for echo_client') {
-            agent { label 'lasseNUC2' }
+            agent { label 'lasse' }
             steps {
                 script {
                     catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
@@ -149,7 +149,7 @@ pipeline {
         }
 
         stage('Flash the board for echo_server') {
-            agent { label 'lasseNUC2' }
+            agent { label 'lasse' }
             steps {
                 script {
                     catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
