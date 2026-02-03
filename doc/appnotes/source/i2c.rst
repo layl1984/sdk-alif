@@ -25,11 +25,13 @@ I2C Features
 
 The following are important features of I2C:
 
-- Select the appropriate I2C speed mode according to the I2C or I3C slave device (currently, SDR mode is supported; HDR-DDR mode is not yet supported):
-  - Standard Speed (SS) mode (up to 100 kbps)
-  - Fast Speed (FS) mode (up to 400 kbps)
-  - Fast Speed Plus (FS+) mode (up to 1 Mbps)
-- Master or slave operation (LPI2C is slave-only)
+- Select the appropriate I2C speed mode:
+   * Standard Speed (SS) mode (up to 100 kbps)
+   * Fast Speed (FS) mode (up to 400 kbps)
+   * Fast Speed Plus (FS+) mode (up to 1 Mbps)
+   * High Speed (HS) mode (up to 3.4 Mbps)
+
+- Master or slave operation (LPI2C0 is slave-only)
 - 7- or 10-bit addressing
 - 7- or 10-bit combined format transfers
 - Bulk transmit mode
@@ -39,6 +41,7 @@ The following are important features of I2C:
 - DMA handshaking interface
 - Programmable SDA hold time
 - Bus clear feature
+
 
 .. include:: prerequisites.rst
 
@@ -84,27 +87,31 @@ Follow these steps to build the I2C application using the Alif Zephyr SDK:
 
 .. code-block:: bash
 
-        west build -p always -b alif_e7_dk/ae722f80f55d5xx/rtss_hp ../alif/samples/drivers/i2c_dw
+        west build -p always -b alif_e7_dk/ae722f80f55d5xx/rtss_hp -S alif-dk ../alif/samples/drivers/i2c_dw
 
 > If using an external **Environment 3 Click Board**, use the build commands for applications on the  M55 HP core:
 
 .. code-block:: bash
 
-        west build -p always -b alif_e7_dk/ae722f80f55d5xx/rtss_hp ../alif/samples/sensor/bme680/
+        west build -p always -b alif_e7_dk/ae722f80f55d5xx/rtss_hp -S alif-dk ../alif/samples/sensor/bme680/
 
 3. Build commands for applications on the M55 HE core:
 
 .. code-block:: bash
 
-        west build -p always -b alif_e7_dk/ae722f80f55d5xx/rtss_he ../alif/samples/drivers/i2c_dw
+        west build -p always -b alif_e7_dk/ae722f80f55d5xx/rtss_he -S alif-dk ../alif/samples/drivers/i2c_dw
 
 > If using an external **Environment 3 Click Board**, use the build commands for applications on the  M55 HE core:
 
 .. code-block:: bash
 
-        west build -p always -b alif_e7_dk/ae722f80f55d5xx/rtss_he ../alif/samples/sensor/bme680/
+        west build -p always -b alif_e7_dk/ae722f80f55d5xx/rtss_he -S alif-dk ../alif/samples/sensor/bme680/
 
 Once the build command completes successfully, executable images will be generated and placed in the `build/zephyr` directory. Both `.bin` (binary) and `.elf` (Executable and Linkable Format) files will be available.
+
+.. note::
+
+   Set ``CONFIG_I2C_DW_CLOCK_SPEED`` to 160 when building the ``LPI2C1`` instance, as the input I2C clock is 160 MHz.
 
 Executing Binary on the DevKit
 ===============================

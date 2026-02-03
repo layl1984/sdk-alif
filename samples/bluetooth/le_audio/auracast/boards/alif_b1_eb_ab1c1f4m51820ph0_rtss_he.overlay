@@ -1,4 +1,4 @@
-/* Copyright (C) 2025 Alif Semiconductor - All Rights Reserved.
+/* Copyright (C) Alif Semiconductor - All Rights Reserved.
  * Use, distribution and modification of this code is permitted under the
  * terms stated in the Alif Semiconductor Software License Agreement
  *
@@ -8,20 +8,15 @@
  *
  */
 
-/* setting i2c0 as master and i2c1 instance as slave.
- *
- */
+
+#define I2S0_IRQ_NUM  141
+#define I2S0_IRQ_PRIO 3
 
 / {
 	aliases {
-		master-i2c = &i2c0;
-		slave-i2c = &i2c1;
+		audio-codec = &wm8904;
+		i2s-bus = &i2s0;
+		/*i2s-mic = &i2s2;*/
 	};
 };
-&i2c0 {
-	status = "okay";
-};
 
-&i2c1 {
-	status = "okay";
-};

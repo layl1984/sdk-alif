@@ -9,8 +9,18 @@
 set(COMMON_SRCS
  	${CMAKE_CURRENT_LIST_DIR}/batt_svc.c
  	${CMAKE_CURRENT_LIST_DIR}/address_verification.c
+	${CMAKE_CURRENT_LIST_DIR}/gapm_api.c
 )
 
+if(pm-ble IN_LIST SNIPPET)
+    message("BLE PM is enabled, including power_mgr.c in common sources.")
+    set(COMMON_SRCS
+	${COMMON_SRCS}
+	${CMAKE_CURRENT_LIST_DIR}/power_mgr.c
+    )
+    zephyr_library_compile_options(-DSNIPPET_PM_BLE_USED=1)
+endif()
+
 set(COMMON_INC
- 	${CMAKE_CURRENT_LIST_DIR}
+	${CMAKE_CURRENT_LIST_DIR}
 )

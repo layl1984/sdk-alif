@@ -1,27 +1,24 @@
-/* Copyright (C) 2025 Alif Semiconductor - All Rights Reserved.
+/* Copyright (C) Alif Semiconductor - All Rights Reserved.
  * Use, distribution and modification of this code is permitted under the
  * terms stated in the Alif Semiconductor Software License Agreement
  *
  * You should have received a copy of the Alif Semiconductor Software
  * License Agreement with this file. If not, please write to:
  * contact@alifsemi.com, or visit: https://alifsemi.com/license
- *
  */
 
-/* setting i2c0 as master and i2c1 instance as slave.
- *
- */
+#include <dt-bindings/gpio/gpio.h>
+
+&lpgpio {
+	pinctrl-0 = < &pinctrl_lpgpio >;
+	pinctrl-names = "default";
+	status = "okay";
+};
 
 / {
-	aliases {
-		master-i2c = &i2c0;
-		slave-i2c = &i2c1;
+	wakeup_pins: wakeup_pins {
+		compatible = "lpgpio-wakeup-pin";
+		lpgpios = <&lpgpio 0 GPIO_ACTIVE_LOW>,
+			  <&lpgpio 1 GPIO_ACTIVE_LOW>;
 	};
-};
-&i2c0 {
-	status = "okay";
-};
-
-&i2c1 {
-	status = "okay";
 };
