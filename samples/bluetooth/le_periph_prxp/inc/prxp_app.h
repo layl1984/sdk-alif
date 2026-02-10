@@ -16,6 +16,5 @@ void get_tx_power(void);
 void ias_process(void);
 void tx_power_read(void);
 void disc_notify(uint16_t reason);
-gapm_callbacks_t append_cbs(gapm_callbacks_t *gapm_append_cbs);
 
 #endif /* PRXP_APP_H */
